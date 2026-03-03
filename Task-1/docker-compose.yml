@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: todo-postgres
+    environment:
+      POSTGRES_DB: tododb
+      POSTGRES_USER: todouser
+      POSTGRES_PASSWORD: todopass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U todouser -d tododb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # NOT exposed to host - internal only
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: todo-backend
+    environment:
+      DB_NAME: tododb
+      DB_USER: todouser
+      DB_PASSWORD: todopass
+      DB_HOST: postgres
+      DB_PORT: 5432
+      SECRET_KEY: ${SECRET_KEY:-django-secret-key-change-in-production}
+      DEBUG: ${DEBUG:-True}
+      ALLOWED_HOSTS: localhost,127.0.0.1,backend,nginx
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend-network
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+    # NOT exposed to host - only accessible via nginx
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.compose
+    container_name: todo-frontend
+    volumes:
+      - frontend_build:/app/dist
+    networks:
+      - frontend-network
+    # NOT exposed to host - served by nginx
+
+  nginx:
+    image: nginx:alpine
+    container_name: todo-nginx
+    ports:
+      - "80:80"  # ONLY public entry point
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - frontend_build:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - frontend-network
+      - backend-network
+    restart: unless-stopped
+
+networks:
+  backend-network:
+    driver: bridge
+    internal: false  # Allows backend to reach postgres
+  frontend-network:
+    driver: bridge
+    internal: false  # Allows nginx to serve frontend
+
+volumes:
+  postgres_data:
+    driver: local
+  frontend_build:
+    driver: local
